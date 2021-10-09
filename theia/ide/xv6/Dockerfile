@@ -8,6 +8,8 @@ ENV NODE_VERSION=$NODE_VERSION
 ENV TERM=xterm-256color
 ENV DEBIAN_FRONTEND=noninteractive
 ENV REPO_NAME=""
+ENV ANUBIS=1
+ENV ANUBIS_IDE=1
 
 # Theia application
 
@@ -33,6 +35,9 @@ RUN set -ex; \
     libsecret-1-0; \
   yarn --pure-lockfile; \
   NODE_OPTIONS="--max_old_space_size=4096" yarn theia build; \
+  HEAD_LINE_NUMBER=$(grep -n '</head>' lib/index.html | cut -f1 -d:); \
+  SCRIPT_LINE='<script>function ping(){if (document.hasFocus()){fetch("/ide/ping")}};document.addEventListener("focus",ping);setInterval(ping,60000)</script>'; \
+  sed -i "${HEAD_LINE_NUMBER}i${SCRIPT_LINE}" lib/index.html; \
   yarn theia download:plugins; \
   yarn --production; \
   yarn autoclean --init; \
@@ -45,7 +50,7 @@ RUN set -ex; \
   chown -R 1001:1001 /home/anubis; \
   cd /home/anubis; \
   cp /etc/skel/.bash_logout /etc/skel/.bashrc /etc/skel/.profile /home/anubis/; \
-  pip3 install --no-cache-dir supervisor; \
+  pip3 install --no-cache-dir supervisor setuptools; \
   echo 'cat /etc/motd' >> /etc/skel/.bashrc; \
   echo 'set auto-load safe-path /' > /etc/skel/.gdbinit; \
   echo 'source /opt/pwndbg/gdbinit.py' >> /etc/skel/.gdbinit; \

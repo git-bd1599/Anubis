@@ -37,7 +37,7 @@ spec:
             memory: 100Mi
           limits:
             cpu: 2
-            memory: 300Mi
+            memory: 500Mi
         ports:
         - name: web
           containerPort: 5000
@@ -65,16 +65,26 @@ spec:
             secretKeyRef:
               name: api
               key: secret-key
-        - name: "OAUTH_CONSUMER_KEY"
+        - name: "OAUTH_NYU_CONSUMER_KEY"
           valueFrom:
             secretKeyRef:
               name: oauth
-              key: consumer-key
-        - name: "OAUTH_CONSUMER_SECRET"
+              key: nyu-consumer-key
+        - name: "OAUTH_NYU_CONSUMER_SECRET"
           valueFrom:
             secretKeyRef:
               name: oauth
-              key: consumer-secret
+              key: nyu-consumer-secret
+        - name: "OAUTH_GITHUB_CONSUMER_KEY"
+          valueFrom:
+            secretKeyRef:
+              name: oauth
+              key: github-consumer-key
+        - name: "OAUTH_GITHUB_CONSUMER_SECRET"
+          valueFrom:
+            secretKeyRef:
+              name: oauth
+              key: github-consumer-secret
         - name: "DATABASE_URI"
           valueFrom:
             secretKeyRef:
@@ -105,8 +115,8 @@ spec:
           httpGet:
             path: /
             port: 5000
-          initialDelaySeconds: 3
-          periodSeconds: 1
+          initialDelaySeconds: 5
+          periodSeconds: 3
           failureThreshold: 60
         livenessProbe:
           httpGet:

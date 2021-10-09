@@ -21,7 +21,7 @@ if uname -a | grep -i linux &> /dev/null; then
     # On linux, we can use the standard unix commands for
     # getting the core and memory resources
     CPUS=$(( $(nproc) / 2 ))
-    MEM="$(( $(free -h | nice grep -i 'mem' | awk '{print substr($2, 1, length($2)-2)}') / 2 ))Gi"
+    MEM="$( echo "$(free -h | nice grep -i 'mem' | awk '{print substr($2, 1, length($2)-2)}') / 2" | bc -l )Gi"
 else
     # On MacOS, we'll need to calculate the CPUs and cores
     # using sysctl. nproc and free are too cool for MacOS
@@ -48,7 +48,8 @@ minikube start \
          --network-plugin=cni \
          --cpus=${CPUS} \
          --memory=${MEM} \
-         --cni=calico
+         --cni=calico \
+         --kubernetes-version=v1.21.5
 
 # Give the cluster a second
 sleep 1
@@ -100,24 +101,39 @@ helm upgrade --install redis bitnami/redis \
     --set 'master.persistence.enabled=false' \
     --namespace anubis
 
-if [ -f debug/init-secrets.sh ]; then
-    bash debug/init-secrets.sh
-fi
-
 kubectl create secret generic api \
     --from-literal=database-uri=mysql+pymysql://anubis:anubis@mariadb.anubis.svc.cluster.local/anubis \
     --from-literal=database-host=mariadb.anubis.svc.cluster.local \
     --from-literal=database-password=anubis \
     --from-literal=database-port=3306 \
     --from-literal=redis-password=anubis \
-    --from-literal=secret-key=$(head -c10 /dev/urandom | openssl sha1 -hex | awk '{print $2}') \
+    --from-literal=secret-key=anubis \
     --namespace anubis
 
 # Create the oauth configuration secrets
 kubectl create secret generic oauth \
-    --from-literal=consumer-key='aaa' \
-    --from-literal=consumer-secret='aaa' \
+    --from-literal=nyu-consumer-key='aaa' \
+    --from-literal=nyu-consumer-secret='aaa' \
+    --from-literal=github-consumer-key='aaa' \
+    --from-literal=github-consumer-secret='aaa' \
     --namespace anubis
+
+# Create default git secret
+kubectl create secret generic git \
+        --from-literal=credentials=DEBUG \
+        --from-literal=token=DEBUG \
+        --namespace anubis
+
+# Create default anubis secret
+kubectl create secret generic anubis \
+        --from-literal=.dockerconfigjson=DEBUG \
+        --namespace anubis
+
+# Give a place to put a git-ignored script for
+# adding / updating sensitive secrets for debugging
+if [ -f debug/init-secrets.sh ]; then
+    bash debug/init-secrets.sh
+fi
 
 # Run the debug.sh script to build, then install all the stuff
 # for anubis.

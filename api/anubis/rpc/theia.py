@@ -1,8 +1,7 @@
-import time
-
 from kubernetes import config, client
 
-from anubis.models import db, Config, TheiaSession
+from anubis.models import db, TheiaSession
+from anubis.utils.config import get_config_int
 from anubis.utils.data import with_context
 from anubis.utils.k8s.theia import (
     update_theia_pod_cluster_addresses,
@@ -12,8 +11,7 @@ from anubis.utils.k8s.theia import (
     reap_theia_session,
     list_theia_pods,
 )
-from anubis.utils.lms.theia import get_theia_pod_name
-from anubis.utils.services.logger import logger
+from anubis.utils.logging import logger
 
 
 @with_context
@@ -49,8 +47,7 @@ def initialize_theia_session(theia_session_id: str):
     )
 
     # Calculate the maximum IDEs that are allowed to exist at any given time
-    max_ides = Config.query.filter(Config.key == "MAX_IDES").first()
-    max_ides = int(max_ides.value) if max_ides is not None else 10
+    max_ides = get_config_int('MAX_THEIA_SESSIONS', default=50)
 
     # Check to ses how many theia sessions are marked as active in the database. If that
     # count exceeds the artificial limit of IDEs, then we need to re-enqueue this job.
@@ -58,7 +55,7 @@ def initialize_theia_session(theia_session_id: str):
             TheiaSession.active == True,
             TheiaSession.state != 'Initializing',
     ).count() >= max_ides:
-        from anubis.utils.services.rpc import enqueue_ide_initialize
+        from anubis.utils.rpc import enqueue_ide_initialize
 
         # If there are too many active pods, recycle the job through the queue.
         logger.info(
@@ -117,6 +114,9 @@ def initialize_theia_session(theia_session_id: str):
     # backgrounded. That means that these functions will almost certainly return
     # before the resources have actually been created and initialized.
     v1.create_namespaced_pod(namespace="anubis", body=pod)
+
+    # Mark theia session as k8s resources requested
+    theia_session.k8s_requested = True
 
     # Commit any and all changes that have been made
     # in the database up to this point.

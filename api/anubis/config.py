@@ -41,17 +41,15 @@ class Config:
             self.CACHE_TYPE = 'NullCache'
 
         # OAuth
-        self.OAUTH_CONSUMER_KEY = os.environ.get("OAUTH_CONSUMER_KEY", default="DEBUG")
-        self.OAUTH_CONSUMER_SECRET = os.environ.get("OAUTH_CONSUMER_SECRET", default="DEBUG")
+        self.OAUTH_NYU_CONSUMER_KEY = os.environ.get("OAUTH_NYU_CONSUMER_KEY", default="DEBUG")
+        self.OAUTH_NYU_CONSUMER_SECRET = os.environ.get("OAUTH_NYU_CONSUMER_SECRET", default="DEBUG")
+
+        # Github OAuth
+        self.OAUTH_GITHUB_CONSUMER_KEY = os.environ.get("OAUTH_GITHUB_CONSUMER_KEY", default="DEBUG")
+        self.OAUTH_GITHUB_CONSUMER_SECRET = os.environ.get("OAUTH_GITHUB_CONSUMER_SECRET", default="DEBUG")
 
         # Logger
         self.LOGGER_NAME = os.environ.get("LOGGER_NAME", default="anubis-api")
-
-        # Theia
-        self.THEIA_TIMEOUT = timedelta(hours=6)
-
-        # autograding specific config
-        self.STATS_REAP_DURATION = timedelta(days=60)
 
         print("Starting with DATABASE_URI: {}".format(self.SQLALCHEMY_DATABASE_URI))
         print("Starting with CACHE_TYPE: {}".format(self.CACHE_TYPE))

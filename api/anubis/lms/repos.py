@@ -2,10 +2,10 @@ from typing import List
 
 from anubis.models import AssignmentRepo, Assignment
 from anubis.utils.data import is_debug
-from anubis.utils.services.cache import cache
+from anubis.utils.cache import cache
 
 
-@cache.memoize(timeout=3600, source_check=True, unless=is_debug)
+@cache.memoize(timeout=10, source_check=True, unless=is_debug)
 def get_repos(user_id: str):
     repos: List[AssignmentRepo] = (
         AssignmentRepo.query.join(Assignment)

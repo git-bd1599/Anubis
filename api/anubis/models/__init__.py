@@ -12,10 +12,11 @@ from anubis.utils.data import rand
 db = SQLAlchemy()
 
 THEIA_DEFAULT_OPTIONS = {
+    "autosave": True,
     "persistent_storage": False,
     "network_policy": "os-student",
     "resources": {
-        "requests": {"cpu": "200m", "memory": "250Mi"},
+        "requests": {"cpu": "300m", "memory": "300Mi"},
         "limits": {"cpu": "2", "memory": "500Mi"},
     },
 }
@@ -69,7 +70,7 @@ class User(db.Model):
 
     @property
     def data(self):
-        from anubis.utils.lms.courses import get_user_permissions
+        from anubis.lms.courses import get_user_permissions
 
         return {
             "id": self.id,
@@ -105,6 +106,7 @@ class Course(db.Model):
     theia_default_options = db.Column(MutableJson, default=lambda: copy.deepcopy(THEIA_DEFAULT_OPTIONS))
     github_org = db.Column(db.TEXT, default='os3224')
     join_code = db.Column(db.String(256), unique=True)
+    display_visuals = db.Column(db.Boolean, default=True)
 
     assignments = db.relationship('Assignment', cascade='all,delete', backref='course')
     ta_for_course = db.relationship('TAForCourse', cascade='all,delete', backref='course')
@@ -247,6 +249,7 @@ class Assignment(db.Model):
 
             # IDE
             "ide_enabled": self.ide_enabled,
+            "autosave": self.theia_options.get('autosave', True),
             "persistent_storage": self.theia_options.get('persistent_storage', False),
 
             # Github
@@ -289,6 +292,7 @@ class AssignmentRepo(db.Model):
         return {
             "id": self.id,
             "github_username": self.github_username,
+            "assignment_id": self.assignment_id,
             "assignment_name": self.assignment.name,
             "ready": self.repo_created and self.collaborator_configured,
             "course_code": self.assignment.course.course_code,
@@ -435,7 +439,7 @@ class AssignedQuestionResponse(db.Model):
 
     @property
     def data(self):
-        from anubis.utils.lms.assignments import get_assignment_due_date
+        from anubis.lms.assignments import get_assignment_due_date
 
         return {
             'submitted': str(self.created),
@@ -476,15 +480,9 @@ class Submission(db.Model):
     accepted = db.Column(db.Boolean, default=True)
 
     # Relationships
-    build = db.relationship("SubmissionBuild", cascade="all,delete", uselist=False, backref='submission')
-    test_results = db.relationship("SubmissionTestResult", cascade="all,delete", backref='submission')
+    build = db.relationship("SubmissionBuild", cascade="all,delete", uselist=False, backref='submission', lazy=False)
+    test_results = db.relationship("SubmissionTestResult", cascade="all,delete", backref='submission', lazy=False)
     repo = db.relationship(AssignmentRepo, backref='submissions')
-
-    @property
-    def netid(self):
-        if self.owner is not None:
-            return self.owner.netid
-        return "null"
 
     @property
     def visible_tests(self):
@@ -677,17 +675,17 @@ class TheiaSession(db.Model):
     autosave = db.Column(db.Boolean, default=True)
     credentials = db.Column(db.Boolean, default=False)
     persistent_storage = db.Column(db.Boolean, default=False)
+    k8s_requested = db.Column(db.Boolean, default=False)
 
     # Timestamps
     created = db.Column(db.DateTime, default=datetime.now)
     ended = db.Column(db.DateTime, nullable=True, default=None)
-    last_heartbeat = db.Column(db.DateTime, default=datetime.now)
     last_proxy = db.Column(db.DateTime, default=datetime.now)
     last_updated = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
     @property
     def data(self):
-        from anubis.utils.lms.theia import theia_redirect_url
+        from anubis.lms.theia import theia_redirect_url
 
         return {
             "id": self.id,
@@ -705,7 +703,6 @@ class TheiaSession(db.Model):
             "state": self.state,
             "created": str(self.created),
             "ended": str(self.ended),
-            "last_heartbeat": str(self.last_heartbeat),
             "last_proxy": str(self.last_proxy),
             "last_updated": str(self.last_updated),
 

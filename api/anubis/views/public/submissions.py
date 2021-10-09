@@ -5,9 +5,9 @@ from anubis.utils.auth.http import require_user
 from anubis.utils.auth.user import current_user
 from anubis.utils.data import req_assert
 from anubis.utils.http.decorators import json_response
-from anubis.utils.http.https import success_response, get_number_arg
-from anubis.utils.lms.courses import is_course_admin, assert_course_context
-from anubis.utils.lms.submissions import regrade_submission, get_submissions
+from anubis.utils.http import success_response, get_number_arg
+from anubis.lms.courses import is_course_admin, assert_course_context
+from anubis.lms.submissions import regrade_submission, get_submissions
 
 submissions_ = Blueprint(
     "public-submissions", __name__, url_prefix="/public/submissions"
@@ -100,7 +100,7 @@ def public_submission(commit: str):
     submission = query.first()
 
     # Make sure we caught one
-    req_assert(submission is not None, 'submission does not exist')
+    req_assert(submission is not None, message='submission does not exist')
 
     # Hand back submission
     return success_response({"submission": submission.full_data})
@@ -139,10 +139,10 @@ def public_regrade_commit(commit: str):
         assert_course_context(submission)
 
     # Check that autograde is enabled for the assignment
-    req_assert(submission.assignment.autograde_enabled, 'Autograde is disabled for this assignment')
+    req_assert(submission.assignment.autograde_enabled, message='Autograde is disabled for this assignment')
 
     # Check that the submission is allowed to be accepted
-    req_assert(submission.accepted, 'Submission was rejected for being late')
+    req_assert(submission.accepted, message='Submission was rejected for being late')
 
     # Regrade
     return regrade_submission(submission)

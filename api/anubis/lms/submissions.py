@@ -15,11 +15,11 @@ from anubis.models import (
 )
 from anubis.rpc.batch import rpc_bulk_regrade
 from anubis.utils.data import is_debug, split_chunks
-from anubis.utils.http.https import error_response, success_response
-from anubis.utils.lms.assignments import get_assignment_due_date
-from anubis.utils.services.cache import cache
-from anubis.utils.services.logger import logger
-from anubis.utils.services.rpc import rpc_enqueue, enqueue_autograde_pipeline
+from anubis.utils.http import error_response, success_response
+from anubis.lms.assignments import get_assignment_due_date
+from anubis.utils.cache import cache
+from anubis.utils.logging import logger
+from anubis.utils.rpc import rpc_enqueue, enqueue_autograde_pipeline
 
 
 def bulk_regrade_submissions(submissions: List[Submission]) -> List[dict]:
@@ -118,7 +118,7 @@ def fix_dangling():
 
             # Find all the submissions that belong to that
             # repo, fix then grade them.
-            for submission in dangling_repo.submissions_:
+            for submission in dangling_repo.submissions:
                 # Give the submission an owner
                 submission.owner_id = owner.id
                 db.session.add(submission)
@@ -128,7 +128,7 @@ def fix_dangling():
                 fixed.append(submission.data)
 
                 # Get the due date
-                due_date = get_assignment_due_date(owner, dangling_repo.assignment)
+                due_date = get_assignment_due_date(owner.id, dangling_repo.assignment.id)
 
                 # Check if the submission should be accepted
                 if dangling_repo.assignment.accept_late and submission.created < due_date:
@@ -168,7 +168,7 @@ def fix_dangling():
             fixed.append(submission.data)
 
             # Get the due date
-            due_date = get_assignment_due_date(owner, submission.assignment)
+            due_date = get_assignment_due_date(owner.id, submission.assignment.id)
 
             # Check if the submission should be accepted
             if submission.assignment.accept_late and submission.created < due_date:
@@ -247,7 +247,7 @@ def recalculate_late_submissions(student: User, assignment: Assignment):
     """
 
     # Get the due date for this student
-    due_date = get_assignment_due_date(student, assignment)
+    due_date = get_assignment_due_date(student, assignment, grace=True)
 
     # Get the submissions that need to be rejected
     s_reject = Submission.query.filter(

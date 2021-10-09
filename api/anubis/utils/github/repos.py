@@ -1,10 +1,10 @@
 import traceback
-
+from typing import List
 from parse import parse
 
-from anubis.models import User, Assignment, AssignmentRepo, db
-from anubis.utils.github.api import github_graphql, github_rest_put
-from anubis.utils.services.logger import logger
+from anubis.models import User, Assignment, AssignmentRepo, db, Submission, SubmissionBuild, SubmissionTestResult
+from anubis.utils.github.api import github_graphql, github_rest
+from anubis.utils.logging import logger
 
 
 def get_github_template_ids(template_repo: str, github_org: str):
@@ -55,9 +55,9 @@ def create_repo_from_template(owner_id: str, template_repo_id: str, new_repo_nam
 
 
 def add_collaborator(github_org: str, new_repo_name: str, github_username: str):
-    return github_rest_put(f'/repos/{github_org}/{new_repo_name}/collaborators/{github_username}', {
+    return github_rest(f'/repos/{github_org}/{new_repo_name}/collaborators/{github_username}', {
         'permission': 'push',
-    })
+    }, method='put')
 
 
 def assignment_repo_name(user: User, assignment: Assignment) -> str:
@@ -78,6 +78,62 @@ def assignment_repo_url(user: User, assignment: Assignment) -> str:
     new_repo_url = f'https://github.com/{github_org}/{new_repo_name}'
 
     return new_repo_url
+
+
+def delete_assignment_repo(user: User, assignment: Assignment):
+    # Get template information
+    github_org = assignment.course.github_org
+
+    # Get a generated assignment repo name
+    new_repo_name = assignment_repo_name(user, assignment)
+
+    # Try to get the assignment repo from the database
+    repo: AssignmentRepo = AssignmentRepo.query.filter(
+        AssignmentRepo.assignment_id == assignment.id,
+        AssignmentRepo.owner_id == user.id,
+    ).first()
+
+    repo_name = new_repo_name
+
+    if repo is not None:
+        # Fetch all submissions for the student
+        submissions: List[Submission] = Submission.query.filter(
+            Submission.assignment_id == assignment.id,
+            Submission.assignment_repo_id == repo.id,
+        ).all()
+        submission_ids = list(map(lambda x: x.id, submissions))
+
+        # Go through all the submissions, deleting builds
+        # and tests as we go
+        SubmissionBuild.query.filter(
+            SubmissionBuild.submission_id.in_(submission_ids)
+        ).delete()
+        SubmissionTestResult.query.filter(
+            SubmissionTestResult.submission_id.in_(submission_ids)
+        ).delete()
+
+        # Delete submissions themselves
+        Submission.query.filter(
+            Submission.id.in_(submission_ids),
+        ).delete()
+
+        # Parse out github org and repo_name from url before deletion
+        github_org, repo_name = parse('https://github.com/{}/{}', repo.repo_url)
+
+        # Delete the repo
+        AssignmentRepo.query.filter(AssignmentRepo.id == repo.id).delete()
+
+        # Commit the deletes
+        db.session.commit()
+
+    try:
+        # Make the github api call to delete the repo on github
+        r = github_rest(f'/repos/{github_org}/{repo_name}', method='delete')
+        logger.error(r)
+    except Exception as e:
+        logger.error(traceback.format_exc())
+        logger.error(f'Failed to delete repo {e}')
+        logger.error(f'continuing')
 
 
 def create_assignment_repo(user: User, assignment: Assignment) -> AssignmentRepo:
@@ -118,8 +174,9 @@ def create_assignment_repo(user: User, assignment: Assignment) -> AssignmentRepo
             # for creating a repo from the template.
             data = get_github_template_ids(template_repo_path, github_org)
 
-            # If the response was None, the api request failed
-            if data is None:
+            # If the response was None, the api request failed. Also check that
+            # some expected values are present in the json data response.
+            if data is None and 'repository' in data and 'id' in data['repository']:
                 return repo
 
             # Get organization and template repo IDs
@@ -151,9 +208,16 @@ def create_assignment_repo(user: User, assignment: Assignment) -> AssignmentRepo
             # to the repo.
             data = add_collaborator(github_org, new_repo_name, user.github_username)
 
+            # Sometimes it takes a moment before we are able to add collaborators to
+            # the repo. The message in the response will be Not Found in this situation.
+            # We can have it try again to fix.
+            if data.get("message", None) == "Not Found":
+                logger.error('Failed to add collaborator (Not Found). Trying again.')
+                data = add_collaborator(github_org, new_repo_name, user.github_username)
+
             # If the response was None, the api request failed
-            if data is None:
-                logger.error('Failed to set permissions')
+            if data is None or data.get("message", None) == "Not Found":
+                logger.error('Failed to add collaborator')
                 return repo
 
             # Mark the repo as collaborator configured

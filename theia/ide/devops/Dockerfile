@@ -11,6 +11,9 @@ RUN set -ex; \
   apt-get install -y --no-install-recommends libsecret-1-0; \
   yarn --pure-lockfile; \
   NODE_OPTIONS="--max_old_space_size=4096" yarn theia build; \
+  HEAD_LINE_NUMBER=$(grep -n '</head>' lib/index.html | cut -f1 -d:); \
+  SCRIPT_LINE='<script>function ping(){if (document.hasFocus()){fetch("/ide/ping")}};document.addEventListener("focus",ping);setInterval(ping,60000)</script>'; \
+  sed -i "${HEAD_LINE_NUMBER}i${SCRIPT_LINE}" lib/index.html; \
   yarn theia download:plugins; \
   yarn --production; \
   yarn autoclean --init; \
@@ -43,6 +46,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV REPO_NAME=""
 ENV INDRA_HOME="/home/anubis/IndraABM"
 ENV PYTHONPATH=${INDRA_HOME}
+ENV ANUBIS=1
+ENV ANUBIS_IDE=1
 
 
 COPY --from=0 /opt/theia /opt/theia
@@ -89,7 +94,7 @@ RUN set -eux; apt-get update; \
     --no-cache-dir; \
   rm get-pip.py; \
   pip3 install --upgrade --no-cache-dir pip; \
-  pip3 install --upgrade --no-cache-dir python-language-server flake8 autopep8 pylint supervisor; \
+  pip3 install --upgrade --no-cache-dir python-language-server flake8 autopep8 pylint supervisor setuptools; \
   pip3 install --no-cache-dir -r /requirements.txt -r /requirements-dev.txt; \
   adduser --disabled-password --gecos '' --uid 1001 anubis; \
   cd /home/anubis; \

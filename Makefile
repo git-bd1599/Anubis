@@ -1,6 +1,8 @@
 PERSISTENT_SERVICES := db traefik redis-master
 RESTART_ALWAYS_SERVICES := api web-dev rpc-default rpc-theia rpc-regrade
-PUSH_SERVICES := api web puller theia-init theia-proxy theia-admin xv6-theia
+PUSH_SERVICES := api web puller theia-init theia-proxy
+THEIA_IDES := theia-xv6 theia-admin theia-devops theia-jepst theia-distributed-systems theia-software-engineering
+
 
 help:
 	@echo 'For convenience'
@@ -32,14 +34,27 @@ push:
 	docker-compose build --parallel --pull $(PUSH_SERVICES)
 	docker-compose push $(PUSH_SERVICES)
 
+.PHONY: build-ides   # Build all ide docker images
+build-ides:
+	docker-compose build --parallel --pull $(THEIA_IDES)
+
+.PHONY: push-ides    # Push ide images to registry.digitalocean.com (requires vpn)
+push-ides:
+	docker-compose push $(THEIA_IDES)
+
+.PHONY: prop-ides    # Create theia-prop daemonset to propigate latest ide images
+prop-ides:
+	kubectl apply -f theia/ide/theia-prop.yaml
+	kubectl rollout restart ds theia-prop
+
 .PHONY: debug        # Start the cluster in debug mode
 debug:
 	docker-compose up -d $(PERSISTENT_SERVICES)
 	docker-compose up \
 		-d --force-recreate \
 		$(RESTART_ALWAYS_SERVICES)
-	@echo 'Waiting a moment before running migrations'
-	sleep 3
+	@echo 'Waiting for db'
+	@until mysqladmin -h 127.0.0.1 ping &> /dev/null; do sleep 1; done
 	@echo 'running migrations'
 	docker-compose exec api alembic upgrade head
 	make startup-links

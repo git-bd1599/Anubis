@@ -1,3 +1,4 @@
+import math
 import random
 import string
 import copy
@@ -11,7 +12,7 @@ from anubis.models import (
     InCourse, TheiaSession
 )
 from anubis.utils.data import rand
-from anubis.utils.lms.theia import mark_session_ended
+from anubis.lms.theia import mark_session_ended
 from anubis.utils.github.repos import assignment_repo_name
 
 lorem = """
@@ -85,15 +86,19 @@ def rand_commit(n=40) -> str:
     return rand(n)
 
 
-def create_assignment(course, users, i=0, do_submissions=True, **kwargs):
+def create_assignment(course, users, i=0, do_submissions=True, do_repos=False, submission_count=30, **kwargs):
+    release = datetime.now() - timedelta(hours=2)
+    due = datetime.now() + timedelta(hours=36) + timedelta(days=i)
+    grace = due + timedelta(hours=1)
+
     # Assignment 1 uniq
     assignment = Assignment(
         id=rand(), name=f"{course.course_code} Assignment {i}", unique_code=rand(8), hidden=False,
         description=lorem, github_template='wabscale/xv6-public',
         pipeline_image=f"registry.digitalocean.com/anubis/assignment/{rand(8)}",
-        release_date=datetime.now() - timedelta(hours=2),
-        due_date=datetime.now() + timedelta(hours=12),
-        grace_date=datetime.now() + timedelta(hours=13),
+        release_date=release,
+        due_date=due,
+        grace_date=grace,
         course_id=course.id, ide_enabled=True, autograde_enabled=False,
         theia_options=copy.deepcopy(THEIA_DEFAULT_OPTIONS),
         **kwargs,
@@ -125,11 +130,14 @@ def create_assignment(course, users, i=0, do_submissions=True, **kwargs):
         for user in users:
             repo_name = assignment_repo_name(user, assignment)
             repo_url = f'https://github.com/os3224/{repo_name}'
+            if do_repos:
+                repo_url = 'https://github.com/wabscale/xv6-public'
             repos.append(
                 AssignmentRepo(
                     id=rand(), owner=user, assignment_id=assignment.id,
                     repo_url=repo_url,
                     github_username=user.github_username,
+                    repo_created=True, collaborator_configured=True,
                 )
             )
 
@@ -141,14 +149,15 @@ def create_assignment(course, users, i=0, do_submissions=True, **kwargs):
                 mark_session_ended(theia_session)
                 theia_sessions.append(theia_session)
 
-            if random.randint(0, 3) != 0:
-                for i in range(random.randint(1, 10)):
+            if submission_count is not None:
+                for i in range(submission_count):
                     submission = Submission(
                         id=rand(),
                         commit=rand_commit(),
                         state="Waiting for resources...",
                         owner=user,
                         assignment_id=assignment.id,
+                        created=grace - timedelta(hours=math.sqrt(i+1)),
                     )
                     submission.repo = repos[-1]
                     submissions.append(submission)
@@ -191,11 +200,14 @@ def create_course(users, **kwargs):
 
 
 def init_submissions(submissions):
-    from anubis.utils.lms.submissions import init_submission
+    from anubis.lms.submissions import init_submission
 
     # Init models
     for submission in submissions:
-        init_submission(submission)
+        init_submission(submission, commit=False)
+    db.session.commit()
+
+    for submission in submissions:
         submission.processed = True
 
         build_pass = random.randint(0, 2) != 0

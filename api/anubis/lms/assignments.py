@@ -17,11 +17,11 @@ from anubis.models import (
     LateException,
 )
 from anubis.utils.data import is_debug
-from anubis.utils.lms.courses import assert_course_admin, get_student_course_ids
-from anubis.utils.lms.courses import is_course_admin
-from anubis.utils.lms.questions import ingest_questions
-from anubis.utils.services.cache import cache
-from anubis.utils.services.logger import logger
+from anubis.lms.courses import assert_course_admin, get_student_course_ids
+from anubis.lms.courses import is_course_admin
+from anubis.lms.questions import ingest_questions
+from anubis.utils.cache import cache
+from anubis.utils.logging import logger
 
 
 @cache.memoize(timeout=30, unless=is_debug)
@@ -30,8 +30,14 @@ def get_assignment_grace(assignment_id: str) -> datetime:
     return assignment.grace_date
 
 
+@cache.memoize(timeout=30, unless=is_debug)
+def get_assignment_due(assignment_id: str) -> datetime:
+    assignment: Assignment = Assignment.query.filter(Assignment.id == assignment_id).first()
+    return assignment.due_date
+
+
 @cache.memoize(timeout=30)
-def get_assignment_due_date(user_id: str, assignment_id: str) -> datetime:
+def get_assignment_due_date(user_id: str, assignment_id: str, grace: bool = False) -> datetime:
     """
     Get the due date for an assignment for a specific user. We check to
     see if there is a late exception for this user, and return that if
@@ -43,8 +49,19 @@ def get_assignment_due_date(user_id: str, assignment_id: str) -> datetime:
     :return:
     """
 
+    # Get the slightly cached grace and due dates
+    due_date: datetime = get_assignment_due(assignment_id)
+    grace_date: datetime = get_assignment_grace(assignment_id)
+
+    # If we are requesting the grace date, then we can just overwrite the
+    # due date with the grace date
+    if grace:
+        due_date = grace_date
+
+    # If there is no user signed in, then there is no late
+    # exception to check for. Simply return the due date.
     if user_id is None:
-        return get_assignment_grace(assignment_id)
+        return due_date
 
     # Check for a late exception for this student
     late_exception: Optional[LateException] = LateException.query.filter(
@@ -57,7 +74,7 @@ def get_assignment_due_date(user_id: str, assignment_id: str) -> datetime:
         return late_exception.due_date
 
     # If no late exception, return the assignment default
-    return get_assignment_grace(assignment_id)
+    return due_date
 
 
 @cache.memoize(timeout=30, unless=is_debug)

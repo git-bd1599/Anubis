@@ -22,7 +22,7 @@ export default function AssignmentView() {
   const [pollingAssignmentId, setPollingAssignmentId] = useState(null);
 
   useEffect(() => {
-    axios.get('/api/public/assignments/', {params: {courseId: query.get('courseId')}}).then((response) => {
+    axios.get('/api/public/assignments', {params: {courseId: query.get('courseId')}}).then((response) => {
       const data = standardStatusHandler(response, enqueueSnackbar);
       if (data) {
         setAssignments(data.assignments);
@@ -70,7 +70,7 @@ export default function AssignmentView() {
       <IDEDialog selectedTheia={selectedTheia} setSelectedTheia={setSelectedTheia}/>
       <Grid container spacing={2}>
         {assignments.map((assignment, pos) => (
-          <Grid item xs={12} sm={6} md={4} lg={4} key={assignment.id}>
+          <Grid item xs={12} sm={6} lg={4} key={assignment.id}>
             <Grow
               in={true}
               style={{transformOrigin: '0 0 0'}}

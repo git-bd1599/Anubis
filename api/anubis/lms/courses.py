@@ -29,8 +29,8 @@ from anubis.models import (
 from anubis.utils.auth.user import current_user
 from anubis.utils.data import is_debug
 from anubis.utils.exceptions import AuthenticationError, LackCourseContext
-from anubis.utils.services.cache import cache
-from anubis.utils.services.logger import logger
+from anubis.utils.cache import cache
+from anubis.utils.logging import logger
 
 
 def get_course_context(full_stop: bool = True) -> Union[None, Course]:
@@ -435,6 +435,66 @@ def get_user_permissions(user: User) -> Dict[str, Any]:
         "ta_for": ta_for,
         "admin_for": admin_for,
     }
+
+
+@cache.memoize(timeout=60, unless=is_debug, source_check=True)
+def get_courses_with_visuals() -> List[Dict[str, Any]]:
+    """
+    Get a list of the course data for courses with
+    usage visuals enabled.
+
+    :return: [
+       Course.data,
+       ...
+    ]
+    """
+
+    # Query for courses with display_visuals on
+    query = Course.query.filter(
+        Course.display_visuals == True
+    ).order_by(Course.course_code.desc())
+
+    # Get the list of courses
+    courses: List[Course] = query.all()
+
+    # Break down course db objects into dictionary
+    return [
+        course.data for course in courses
+    ]
+
+
+@cache.memoize(timeout=3600, source_check=True, unless=is_debug)
+def get_course_admin_ids(course_id: str) -> List[str]:
+    """
+    Get a list of course admin id values.
+
+    * highly cached *
+
+    :param course_id:
+    :return:
+    """
+
+    # Query for the course
+    course: Course = Course.query.filter(
+        Course.id == course_id
+    ).first()
+
+    # If the course does not exist, then soft fail
+    if course is None:
+        return []
+
+    # Query TAs
+    tas: List[TAForCourse] = TAForCourse.query.filter(
+        TAForCourse.course_id == course.id,
+    ).all()
+
+    # Query professors
+    professors: List[ProfessorForCourse] = ProfessorForCourse.query.filter(
+        ProfessorForCourse.course_id == course.id,
+    ).all()
+
+    # Generate list from the owner_id values from each list of users
+    return list(map(lambda x: x.owner_id, tas)) + list(map(lambda x: x.owner_id, professors))
 
 
 course_context: Course = LocalProxy(get_course_context)

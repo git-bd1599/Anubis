@@ -1,15 +1,18 @@
 import base64
 import traceback
-from datetime import datetime
-from typing import Tuple, Optional
+from datetime import datetime, timedelta
+from typing import Tuple, Optional, List
 
-from kubernetes import client
+from kubernetes import config, client
 
-from anubis.models import db, TheiaSession
+from anubis.models import db, TheiaSession, Course
 from anubis.utils.auth.token import create_token
-from anubis.utils.lms.theia import get_theia_pod_name, mark_session_ended
-from anubis.utils.services.logger import logger
+from anubis.lms.theia import get_theia_pod_name, mark_session_ended
+from anubis.lms.courses import get_course_admin_ids
+from anubis.utils.logging import logger
 from anubis.utils.github.parse import parse_github_repo_name
+from anubis.utils.config import get_config_int, get_config_str
+from anubis.utils.data import is_debug
 
 
 def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod, Optional[client.V1PersistentVolumeClaim]]:
@@ -35,8 +38,10 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
     # List of volumes
     pod_volumes = []
 
-    # Extra env to add to the main theia server container
-    theia_extra_env = []
+    # Extra env to add to the theia pod containers
+    sidecar_extra_env: List[client.V1EnvVar] = []
+    theia_extra_env: List[client.V1EnvVar] = []
+    init_extra_env: List[client.V1EnvVar] = []
 
     # Get the set repo url for this session. If the assignment has github repos disabled,
     # then default to an empty string.
@@ -51,6 +56,66 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
     privileged = theia_session.privileged
     persistent_storage = theia_session.persistent_storage
 
+    # Value for if the git secret should be included in the init and sidecar
+    # containers (for provisioning and autosave).
+    include_git_secret: bool = True
+
+    # Value for if the docker secret should be included in the admin
+    # theia container. Default to the value of privileged.
+    include_docker_secret: bool = privileged
+
+    # If we are in debug mode, then check if the git secret is available. If it is
+    # not available, then we'll need to not include it in the init and sidecar
+    # containers. It is then up to those containers to handle the missing git
+    # credentials.
+    if is_debug():
+
+        # Load the kubernetes incluster config
+        config.load_incluster_config()
+        v1 = client.CoreV1Api()
+
+        # Determine if the git secret should be included
+        try:
+            # Attempt to read the git secret from the anubis namespace.
+            # This will throw client.exceptions.ApiException(404) if
+            # the secret is not available.
+            git_secret: client.V1Secret = v1.read_namespaced_secret('git', 'anubis')
+
+            # Decode git token
+            git_token = base64.b64decode(git_secret.data['token'].encode()).decode('utf-8', 'ignore')
+
+            # If git token is DEBUG, then we should not pass it to the init and sidecar
+            if git_token == 'DEBUG':
+                include_git_secret = False
+                autosave = False
+
+        # Catch kubernetes.client.exceptions.ApiException
+        except client.exceptions.ApiException as e:
+            # If we 404ed, then the secret is not there.
+            if e.status == 404:
+                include_git_secret = False
+                autosave = False
+
+        # Determine if the docker config json secret should be included (for admin ide)
+        try:
+            # Attempt to read the anubis secret from the anubis namespace.
+            # This will throw client.exceptions.ApiException(404) if
+            # the secret is not available.
+            anubis_secret: client.V1Secret = v1.read_namespaced_secret('anubis', 'anubis')
+
+            # Decode git token
+            docker_config_json = base64.b64decode(anubis_secret.data['.dockerconfigjson'].encode()).decode('utf-8', 'ignore')
+
+            # If git token is DEBUG, then we should not pass it to the init and sidecar
+            if docker_config_json == 'DEBUG':
+                include_docker_secret = False
+
+        # Catch kubernetes.client.exceptions.ApiException
+        except client.exceptions.ApiException as e:
+            # If we 404ed, then the secret is not there.
+            if e.status == 404:
+                include_docker_secret = False
+
     # Construct the PVC name from the theia pod name
     theia_volume_name = f"{netid}-{theia_session.id[:6]}-ide"
 
@@ -61,6 +126,11 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
     if persistent_storage:
         # Overwrite the volume name to be the user's persistent volume
         theia_volume_name = netid + "-ide-volume"
+
+        # The storage class to be used on prod is probably going to be longhorn. Regardless,
+        # we'll want to be able to set this on the fly from a config value. If we default
+        # to None, then the cluster default storage class will be used.
+        theia_storage_class_name = get_config_str('THEIA_STORAGE_CLASS_NAME', default=None)
 
         # Create the persistent volume claim object. Since this is a
         # ReadWriteMany volume, the default storage class should
@@ -77,6 +147,7 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
             spec=client.V1PersistentVolumeClaimSpec(
                 access_modes=["ReadWriteOnce"],
                 volume_mode="Filesystem",
+                storage_class_name=theia_storage_class_name,
                 resources=client.V1ResourceRequirements(
                     requests={
                         "storage": "1Gi",
@@ -98,14 +169,15 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
     else:
         pod_volumes.append(client.V1Volume(name=theia_volume_name))
 
-    # Create the init container. This will clone the initial repo onto
-    # the shared volume.
-    init_container = client.V1Container(
-        name=f"theia-init",
-        image="registry.digitalocean.com/anubis/theia-init",
-        image_pull_policy="IfNotPresent",
-        env=[
-            client.V1EnvVar(name="GIT_REPO", value=repo_url),
+    # If the git secret should be included, then we add them to the
+    # sidecar and init envs here.
+    if include_git_secret:
+
+        # Add git cred to sidecar
+        sidecar_extra_env.append(
+            # Add the git credentials secret to the container. The entrypoint
+            # processes for this container will read this credential and drop
+            # it where it needs to.
             client.V1EnvVar(
                 name="GIT_CRED",
                 value_from=client.V1EnvVarSource(
@@ -114,6 +186,38 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
                     )
                 ),
             ),
+        )
+
+        # Add git cred to init
+        init_extra_env.append(
+            # Add the git credentials secret to the container. The entrypoint
+            # processes for this container will read this credential and drop
+            # it where it needs to.
+            client.V1EnvVar(
+                name="GIT_CRED",
+                value_from=client.V1EnvVarSource(
+                    secret_key_ref=client.V1SecretKeySelector(
+                        name="git", key="credentials"
+                    )
+                ),
+            ),
+        )
+
+    ##################################################################################
+    # INIT CONTAINER
+
+    # Create the init container. This will clone the initial repo onto
+    # the shared volume.
+    init_container = client.V1Container(
+        name=f"theia-init",
+        image="registry.digitalocean.com/anubis/theia-init",
+        image_pull_policy="IfNotPresent",
+        env=[
+            # Git repo to clone
+            client.V1EnvVar(name="GIT_REPO", value=repo_url),
+
+            # Add extra env if there is any
+            *init_extra_env,
         ],
         volume_mounts=[
             client.V1VolumeMount(
@@ -122,6 +226,48 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
             )
         ],
     )
+
+    ##################################################################################
+    # SIDECAR CONTAINER
+
+    # Sidecar container where anything that the student should not see exists.
+    # The main purpose for this container is to keep the git credentials separate
+    # from the student environment. The shared /home/project volume is used to share
+    # the repo between these two containers.
+    sidecar_container = client.V1Container(
+        name="sidecar",
+        image="registry.digitalocean.com/anubis/theia-sidecar",
+        image_pull_policy="IfNotPresent",
+
+        env=[
+            # Set the AUTOSAVE environment variable to ON or OFF. If the variable
+            # is set to false, then the autosave loop will be skipped.
+            client.V1EnvVar(
+                name='AUTOSAVE',
+                value='ON' if autosave else 'OFF',
+            ),
+
+            *sidecar_extra_env,
+        ],
+
+        # Add a security context to disable privilege escalation
+        security_context=client.V1SecurityContext(
+            allow_privilege_escalation=False,
+            run_as_non_root=True,
+            run_as_user=1001,
+        ),
+
+        # Add the shared volume mount to /home/project
+        volume_mounts=[
+            client.V1VolumeMount(
+                mount_path="/home/anubis",
+                name=theia_volume_name,
+            )
+        ],
+    )
+
+    ##################################################################################
+    # THEIA CONTAINER
 
     # If this is an admin IDE session, then we should add a token
     # for the anubis cli to be able to authenticate to the anubis
@@ -145,7 +291,7 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
         theia_user_id = 0
 
     # If privileged, add docker config file to pod as a volume
-    if privileged:
+    if privileged and include_docker_secret:
         pod_volumes.append(client.V1Volume(
             name='docker-config',
             secret=client.V1SecretVolumeSource(
@@ -264,51 +410,8 @@ def create_theia_k8s_pod_pvc(theia_session: TheiaSession) -> Tuple[client.V1Pod,
         ),
     )
 
-    # Sidecar container where anything that the student should not see exists.
-    # The main purpose for this container is to keep the git credentials separate
-    # from the student environment. The shared /home/project volume is used to share
-    # the repo between these two containers.
-    sidecar_container = client.V1Container(
-        name="sidecar",
-        image="registry.digitalocean.com/anubis/theia-sidecar",
-        image_pull_policy="IfNotPresent",
-
-        env=[
-            # Add the git credentials secret to the container. The entrypoint
-            # processes for this container will read this credential and drop
-            # it where it needs to.
-            client.V1EnvVar(
-                name="GIT_CRED",
-                value_from=client.V1EnvVarSource(
-                    secret_key_ref=client.V1SecretKeySelector(
-                        name="git", key="credentials"
-                    )
-                ),
-            ),
-
-            # Set the AUTOSAVE environment variable to ON or OFF. If the variable
-            # is set to false, then the autosave loop will be skipped.
-            client.V1EnvVar(
-                name='AUTOSAVE',
-                value='ON' if autosave else 'OFF',
-            ),
-        ],
-
-        # Add a security context to disable privilege escalation
-        security_context=client.V1SecurityContext(
-            allow_privilege_escalation=False,
-            run_as_non_root=True,
-            run_as_user=1001,
-        ),
-
-        # Add the shared volume mount to /home/project
-        volume_mounts=[
-            client.V1VolumeMount(
-                mount_path="/home/anubis",
-                name=theia_volume_name,
-            )
-        ],
-    )
+    ##################################################################################
+    # POD
 
     # Add the main theia container, and the sidecar
     # to the containers list.
@@ -471,8 +574,10 @@ def reap_old_theia_sessions(theia_pods: client.V1PodList):
     :param theia_pods:
     :return:
     """
-    # Get the app config
-    from anubis.config import config as _config
+
+    # Get stale timeout hours
+    theia_stale_timeout_hours = get_config_int('THEIA_STALE_TIMEOUT_HOURS', default=6)
+    theia_stale_timeout = timedelta(hours=theia_stale_timeout_hours)
 
     # Iterate through all active
     for n, pod in enumerate(theia_pods.items):
@@ -490,7 +595,7 @@ def reap_old_theia_sessions(theia_pods: client.V1PodList):
             continue
 
         # If the session is younger than 6 hours old, continue
-        if datetime.now() <= theia_session.created + _config.THEIA_TIMEOUT:
+        if datetime.now() <= theia_session.created + theia_stale_timeout:
             logger.info(f'NOT reaping session {theia_session.id}')
             continue
 
@@ -522,10 +627,85 @@ def fix_stale_theia_resources(theia_pods: client.V1PodList):
     # Log the event
     logger.info("Checking active ActiveTheia sessions")
 
-    # Get active pods and db rows
-    active_db_sessions = TheiaSession.query.filter(
+    # Get the theia timeout config value
+    standard_theia_timeout = get_config_int('THEIA_STALE_PROXY_MINUTES', default=10)
+    admin_theia_timeout = get_config_int('THEIA_ADMIN_STALE_PROXY_MINUTES', default=60)
+
+    # Get list of all courses
+    courses: List[Course] = Course.query.all()
+
+    active_db_sessions: List[TheiaSession] = []
+
+    # Iterate over all courses
+    for course in courses:
+        print("filtering stale ides for course {} - {}".format(course.name, course.course_code))
+
+        # Get a list of (heavily cached) admin id strings
+        course_admin_ids = get_course_admin_ids(course.id)
+        print('course_admin_ids', course.name, course_admin_ids, sep=' :: ')
+
+        # Build query for theia active sessions within the course
+        query = TheiaSession.query.filter(
+            # Get sessions marked as active
+            TheiaSession.active == True,
+
+            # Only consider sessions that have had some
+            # time to have their k8s resources requested.
+            TheiaSession.k8s_requested == True,
+
+            # Only consider sessions that are a part of
+            # this course.
+            TheiaSession.course_id == course.id,
+        )
+
+        # Get a list of the standard (student) theia sessions that are active
+        standard_active_db_theia_sessions: List[TheiaSession] = query.filter(
+            # Filter out admin users (only students in the course)
+            ~TheiaSession.owner_id.in_(course_admin_ids),
+
+            # Filter for sessions that have had a proxy in the last 10 minutes
+            TheiaSession.last_proxy >= datetime.now() - timedelta(minutes=standard_theia_timeout),
+        ).all()
+
+        # Get a list of the admin (professor/ta) theia sessions that are active
+        admin_active_db_theia_sessions: List[TheiaSession] = query.filter(
+            # Filter for admin users (only professors+tas)
+            TheiaSession.owner_id.in_(course_admin_ids),
+
+            # Filter for sessions that have had a proxy in the last 60 minutes
+            TheiaSession.last_proxy >= datetime.now() - timedelta(minutes=admin_theia_timeout),
+        ).all()
+
+        # Build list of all the active theia ides (in the database)
+        # from the standard and admin sessions.
+        active_db_sessions.extend(standard_active_db_theia_sessions)
+        active_db_sessions.extend(admin_active_db_theia_sessions)
+
+    # Make sure to cover theia sessions that do not have a set
+    # course as well. Hold these course-less ides to the
+    # standard timeout.
+    no_course_db_active_sessions: List[TheiaSession] = TheiaSession.query.filter(
+        # Get sessions marked as active
         TheiaSession.active == True,
+
+        # Only consider sessions that have had some
+        # time to have their k8s resources requested.
+        TheiaSession.k8s_requested == True,
+
+        # Course-less theia session
+        TheiaSession.course_id == None,
+
+        # Filter for sessions that have had a proxy in the last 10 minutes
+        TheiaSession.last_proxy >= datetime.now() - timedelta(minutes=standard_theia_timeout),
     ).all()
+
+    # Print the course-less ides to the screen
+    print('no-course ides', no_course_db_active_sessions, sep=' :: ')
+
+    # Add the no-course theia sessions to the active db sessions list
+    active_db_sessions.extend(no_course_db_active_sessions)
+
+    print('active_db_sessions', active_db_sessions)
 
     # Build set of active pod session ids
     active_pod_ids = set()
