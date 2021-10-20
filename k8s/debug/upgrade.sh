@@ -18,11 +18,13 @@ helm upgrade \
      --set "rpc.replicas=1" \
      --set "theia.proxy.replicas=1" \
      --set "api.datacenter=false" \
-     --set "reaper.suspend=true" \
-     --set "visuals.suspend=true" \
      --set "theia.proxy.domain=ide.localhost" \
      --set "rollingUpdates=false" \
      --set "domain=localhost" \
      --set "puller.enable=false" \
-     --set "backup.enable=false" \
+     --set "reaper.suspend=true" \
+     --set "visuals.suspend=true" \
+     --set "backup.suspend=true" \
+     --set "autograde_recalculate.suspend=true" \
+     --set "daily_cleanup.suspend=true" \
      $@

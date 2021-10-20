@@ -1,8 +1,8 @@
 # https://github.com/theia-ide/theia-apps/tree/master/theia-cpp-docker
 
-ARG NODE_VERSION=12.18.3
+ARG NODE_VERSION=12.22.6
 
-FROM node:${NODE_VERSION} as build
+FROM node:${NODE_VERSION}-buster as build
 ARG version=latest
 WORKDIR /opt/theia
 ADD $version.package.json ./package.json
@@ -32,12 +32,12 @@ RUN set -ex; \
   rm -rf /var/cache/apt/*; \
   rm -rf /var/lib/apt/lists/*
 
-ARG NODE_VERSION=12.18.3
+ARG NODE_VERSION=12.22.6
 
 ##################################################################################
 
-FROM node:${NODE_VERSION} as theia
-ARG PY_VERSION=3.9.6
+FROM node:${NODE_VERSION}-buster as theia
+ARG PY_VERSION=3.10.0
 
 ENV PY_VERSION=$PY_VERSION
 ENV NODE_VERSION=$NODE_VERSION

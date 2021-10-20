@@ -1,3 +1,4 @@
+# Global Settings
 debug: false
 rollingUpdates: true
 healthChecks: true
@@ -6,6 +7,11 @@ vpnOnly: false
 imagePullPolicy: "Always"
 imagePullSecret: "anubis"
 
+
+###############################################################################
+# Deployments with Services
+
+# Main anubis api
 api:
   replicas: 3
   workers: 4
@@ -13,57 +19,83 @@ api:
   image: "registry.digitalocean.com/anubis/api"
   tag: "latest"
 
-reaper:
-  enable: true
-  schedule: "*/5 * * * *"
-  suspend: false
-
-visuals:
-  enable: true
-  schedule: "*/5 * * * *"
-  suspend: false
-
-pipeline_api:
-  replicas: 1
-  workers: 1
-
+# Anubis web static
 web:
   replicas: 2
   image: "registry.digitalocean.com/anubis/web"
   tag: "latest"
 
-logstash:
-  image: "registry.digitalocean.com/anubis/logstash"
-  tag: "latest"
-
-rpc:
+# API for submission pipeline reporting
+pipeline_api:
   replicas: 1
-  queues: ["default", "theia", "regrade"]
+  workers: 1
 
+# Theia IDE proxy and poller
 theia:
   enable: true
+
+  # theia-poller deployment
   poller:
     replicas: 1
+
+  # theia-proxy deployment
   proxy:
     replicas: 2
     image: "registry.digitalocean.com/anubis/theia-proxy"
     tag: "latest"
 
-elasticsearch:
-  service: elasticsearch-master.elastic.svc.cluster.local
+###############################################################################
+
+
+
+###############################################################################
+# Cron Jobs
+reaper:
+  enable: true
+  suspend: false
+  schedule: "*/5 * * * *"
+
+daily_cleanup:
+  enable: true
+  suspend: false
+  schedule: "0 4 * * *"  # 4AM
+
+autograde_recalculate:
+  enable: true
+  suspend: false
+  schedule: "*/30 * * * *"
+
+visuals:
+  enable: true
+  suspend: false
+  schedule: "*/5 * * * *"
 
 backup:
   enable: true
   suspend: false
-  schedule: "0 0 * * *"
+  schedule: "0 0 * * *" # Midnight
   secretName: anubis-backup-creds
+###############################################################################
 
+
+###############################################################################
+# RPC Pools
+rpc:
+  replicas: 1
+  queues: ["default", "theia", "regrade"]
+###############################################################################
+
+
+###############################################################################
+# Horizontal Pod Autoscaling
 hpa:
   enable: true
   rpc:
   - name: rpc-default
   - name: rpc-theia
   - name: rpc-regrade
+###############################################################################
+
 
 puller:
   enable: false
